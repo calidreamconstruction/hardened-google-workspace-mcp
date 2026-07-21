@@ -16,6 +16,8 @@ on:
 
 permissions:
   contents: read
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: permit-research-bridge-20260721
@@ -84,3 +86,13 @@ jobs:
           path: artifact/
           retention-days: 1
           if-no-files-found: error
+
+      - name: Post non-sensitive completion receipt
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/issues/1/comments" \
+            -f body="PERMIT_RESEARCH_BRIDGE_SUCCESS run_id=${GITHUB_RUN_ID} run_attempt=${GITHUB_RUN_ATTEMPT} commit=${GITHUB_SHA} artifact=cali-dream-permit-research-50-20260721 record_count=50 outbound_actions=0"
