@@ -1,0 +1,86 @@
+name: Temporary Permit Research Bridge
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/permit_research_bridge.py
+      - .github/workflows/permit-research-bridge.yml
+  push:
+    branches:
+      - ops/permit-research-bridge-20260721
+    paths:
+      - scripts/permit_research_bridge.py
+      - .github/workflows/permit-research-bridge.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: permit-research-bridge-20260721
+  cancel-in-progress: false
+
+jobs:
+  build-artifact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout temporary branch
+        uses: actions/checkout@v4
+
+      - name: Download official City of San Diego dataset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/permit-research" artifact
+          curl --fail --location --silent --show-error \
+            --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 300 \
+            https://seshat.datasd.org/development_permits/approvals_created_2026_datasd.csv \
+            --output "$RUNNER_TEMP/permit-research/approvals_created_2026_datasd.csv"
+          test -s "$RUNNER_TEMP/permit-research/approvals_created_2026_datasd.csv"
+          sha256sum "$RUNNER_TEMP/permit-research/approvals_created_2026_datasd.csv"
+
+      - name: Generate exactly 50 research-only candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/permit_research_bridge.py \
+            "$RUNNER_TEMP/permit-research/approvals_created_2026_datasd.csv" \
+            artifact
+
+      - name: Verify count, privacy and zero-outbound contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import csv
+          import json
+          from pathlib import Path
+
+          root = Path("artifact")
+          report = json.loads((root / "cali_dream_permit_research_50_20260721.json").read_text(encoding="utf-8"))
+          manifest = json.loads((root / "cali_dream_permit_research_50_20260721_manifest.json").read_text(encoding="utf-8"))
+          with (root / "cali_dream_permit_research_50_20260721.csv").open(encoding="utf-8", newline="") as handle:
+              rows = list(csv.DictReader(handle))
+
+          assert report["record_count"] == 50
+          assert len(report["records"]) == 50
+          assert len(rows) == 50
+          assert report["outbound_authorized"] is False
+          assert all(item["outbound_authorized"] is False for item in report["records"])
+          assert len({item["duplicate_key"] for item in report["records"]}) == 50
+          assert not any("permit_holder_name" in item for item in report["records"])
+          assert manifest["record_count"] == 50
+          assert all(value == 0 for value in manifest["outbound_actions"].values())
+          print(json.dumps({"record_count": 50, "unique_records": 50, "outbound_actions": 0}))
+          PY
+          sha256sum artifact/*
+
+      - name: Upload one-day private workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cali-dream-permit-research-50-20260721
+          path: artifact/
+          retention-days: 1
+          if-no-files-found: error
