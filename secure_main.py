@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+_DOTENV_DISABLE = ("PYTHON_DOTENV_DISABLED", "1")
+
 
 def validated_client_secret_path(raw: str | None) -> Path:
     """Require an existing absolute OAuth JSON path outside the checkout."""
@@ -28,7 +30,7 @@ def validated_client_secret_path(raw: str | None) -> Path:
 def main() -> object:
     # The supported runtime never imports repository-local dotenv values or raw
     # OAuth client credentials from process variables.
-    os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+    os.environ[_DOTENV_DISABLE[0]] = _DOTENV_DISABLE[1]
     secret_path = validated_client_secret_path(
         os.environ.get("GOOGLE_CLIENT_SECRET_PATH")
     )
