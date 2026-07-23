@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 _DOTENV_DISABLE = ("PYTHON_DOTENV_DISABLED", "1")
 
@@ -27,10 +28,21 @@ def validated_client_secret_path(raw: str | None) -> Path:
     return resolved
 
 
+def disable_dotenv_loading() -> None:
+    """Prevent the legacy server import from reading any dotenv file or stream."""
+    import dotenv
+
+    def disabled_load_dotenv(*_args: Any, **_kwargs: Any) -> bool:
+        return False
+
+    dotenv.load_dotenv = disabled_load_dotenv
+
+
 def main() -> object:
     # The supported runtime never imports repository-local dotenv values or raw
     # OAuth client credentials from process variables.
     os.environ[_DOTENV_DISABLE[0]] = _DOTENV_DISABLE[1]
+    disable_dotenv_loading()
     secret_path = validated_client_secret_path(
         os.environ.get("GOOGLE_CLIENT_SECRET_PATH")
     )
