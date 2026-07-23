@@ -30,7 +30,7 @@ Use a Google OAuth **Desktop app** JSON file through `GOOGLE_CLIENT_SECRET_PATH`
 - Do not paste `client_secret` into `.mcp.json`, `~/.claude.json`, issue comments, logs, shell history, or chat.
 - Revoke and replace the OAuth client if its secret was committed or disclosed.
 
-The installed `hardened-google-workspace-mcp` command enters through `secure_main.py`, which sets `PYTHON_DOTENV_DISABLED=1` before importing the upstream server. Repository-local `.env` loading is therefore disabled on the supported entrypoint.
+The installed `hardened-google-workspace-mcp` command enters through `secure_main.py`. Before importing the upstream server it forces the dotenv-disable environment marker, replaces `dotenv.load_dotenv` with a no-op, validates that the OAuth JSON is an existing absolute file outside the checkout, and removes raw client-ID/client-secret environment fallbacks. Repository-local `.env` loading is therefore disabled on the supported entrypoint even when the locked python-dotenv build does not enforce that marker itself.
 
 Running `python -m main` is a legacy bypass and is not covered by this secure-entrypoint guarantee. Use the installed command or `python -m secure_main`.
 
@@ -46,7 +46,7 @@ Plaintext, null, chainer, and unknown keyring backends are rejected at startup.
 
 ### Windows-safe chunking
 
-A Google OAuth payload can exceed the per-entry size accepted by Windows Credential Manager. Version 1.8.0 does not fall back to a new token file. It:
+A Google OAuth payload can exceed the per-entry size accepted by Windows Credential Manager. The hardened runtime does not fall back to a new token file. It:
 
 1. serializes the credential with an explicit schema and user identity;
 2. splits it into bounded keyring chunks;
@@ -72,10 +72,11 @@ The secure store never calls the legacy store's write method.
 ## Integrity and failure behavior
 
 - New chunks are generation-addressed so readers continue to see the previous committed generation until the new manifest is written.
-- A failed registry update restores the previous manifest and removes uncommitted chunks.
+- A failed registry update restores the previous manifest and user registry and removes uncommitted chunks.
 - Missing or altered chunks are not reconstructed from plaintext.
 - Credential values are never printed by the secure store.
 - The user registry and manifest are read back after writes.
+- A crash-residual legacy token file is retried on the next secure read and blocks credential use until deletion is proven.
 - Deletion removes the committed generation, manifest, prior single-entry record, user registry entry, and any legacy local record.
 
 ## Remaining risks
@@ -100,6 +101,7 @@ Security claims in this document require:
 - the `hardened-google-workspace-mcp` or `python -m secure_main` entrypoint;
 - an external OAuth Desktop-app JSON path;
 - a trusted native keyring backend;
+- an installation that passes `uv sync --locked`;
 - unmodified hardening guards and tool registry.
 
 ## Reporting a vulnerability
