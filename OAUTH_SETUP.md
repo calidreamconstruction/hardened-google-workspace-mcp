@@ -1,178 +1,110 @@
-# Creating Google OAuth Credentials
+# Create Google OAuth Desktop Credentials
 
-This guide walks you through creating OAuth 2.0 credentials in Google Cloud Console. You'll need these credentials to authenticate the Secure Workspace MCP server with your Google account.
+This guide creates the OAuth client used by the local hardened Workspace MCP server. The downloaded JSON is stored outside the Git repository and passed to the process by absolute path.
 
-**Time required:** 10-15 minutes
+## 1. Create or select a Google Cloud project
 
----
+1. Open Google Cloud Console.
+2. Select an existing project or create a dedicated project such as `Claude Workspace MCP`.
+3. Record the exact Google account and project being configured.
 
-## Step 1: Create or Select a Google Cloud Project
+## 2. Enable only the APIs you use
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Sign in with your Google account
-3. Click the project dropdown at the top of the page
-4. Either:
-   - Select an existing project, OR
-   - Click **"New Project"**, give it a name (e.g., "Claude Workspace MCP"), and click **Create**
+Enable the APIs for the tool groups you intend to expose:
 
----
+- Gmail API
+- Google Drive API
+- Google Docs API
+- Google Sheets API
+- Google Calendar API
+- Google Forms API
+- Google Slides API
 
-## Step 2: Enable Required APIs
+Disabling a tool group in the server reduces the requested scope set; APIs that are not used do not need to be enabled.
 
-1. Go to **APIs & Services > Library** (or use [this link](https://console.cloud.google.com/apis/library))
-2. Search for and enable each of these APIs:
+## 3. Configure the OAuth consent screen
 
-| API Name | Search Term |
-|----------|-------------|
-| Gmail API | `gmail` |
-| Google Drive API | `drive` |
-| Google Docs API | `docs` |
-| Google Sheets API | `sheets` |
-| Google Calendar API | `calendar` |
-| Google Forms API | `forms` |
-| Google Slides API | `slides` |
+1. Open **Google Auth Platform** or **APIs & Services → OAuth consent screen**.
+2. Choose **Internal** for a Workspace-only organizational integration when available, otherwise choose **External**.
+3. Set an accurate application name, support email, and developer contact.
+4. For an External app in Testing mode, add the exact Google accounts that may authorize it.
+5. Save the configuration.
 
-For each API:
-1. Click on it in the search results
-2. Click **Enable**
-3. Wait for it to enable, then go back to the Library
+The server requests scopes dynamically for enabled tool groups. Review the consent screen at authorization time and deny scopes or accounts you did not intend to use.
 
-> **Tip:** You only need to enable APIs for services you plan to use. Gmail, Drive, and Calendar are the most common.
+## 4. Create a Desktop app client
 
----
+1. Open **APIs & Services → Credentials**.
+2. Select **Create credentials → OAuth client ID**.
+3. Choose **Desktop app**.
+4. Use a recognizable name such as `Hardened Workspace MCP - PC`.
+5. Create the client.
+6. Select **Download JSON**.
 
-## Step 3: Configure OAuth Consent Screen
+Do not paste the displayed client secret into Claude configuration. The downloaded JSON already contains the client ID and client secret in the format expected by Google's installed-app flow.
 
-1. Go to **APIs & Services > OAuth consent screen** (or use [this link](https://console.cloud.google.com/apis/credentials/consent))
-2. Select **User Type**:
-   - Choose **Internal** if you have Google Workspace and want to limit to your organization
-   - Choose **External** if using a personal Google account or want broader access
-3. Click **Create**
+## 5. Store the JSON outside the repository
 
-### Fill in the consent screen details:
+### Windows PowerShell
 
-**App Information:**
-- **App name:** `Claude Workspace Integration` (or any name you prefer)
-- **User support email:** Your email address
-- **App logo:** (optional, skip)
-
-**App domain:** (optional, skip all)
-
-**Developer contact information:**
-- **Email addresses:** Your email address
-
-4. Click **Save and Continue**
-
-### Scopes:
-
-1. Click **Add or Remove Scopes**
-2. In the filter box, paste each scope below and check it:
-
-```
-openid
-https://www.googleapis.com/auth/userinfo.email
-https://www.googleapis.com/auth/userinfo.profile
-https://www.googleapis.com/auth/gmail.readonly
-https://www.googleapis.com/auth/gmail.compose
-https://www.googleapis.com/auth/gmail.modify
-https://www.googleapis.com/auth/gmail.labels
-https://www.googleapis.com/auth/drive
-https://www.googleapis.com/auth/drive.readonly
-https://www.googleapis.com/auth/drive.file
-https://www.googleapis.com/auth/documents.readonly
-https://www.googleapis.com/auth/documents
-https://www.googleapis.com/auth/spreadsheets.readonly
-https://www.googleapis.com/auth/spreadsheets
-https://www.googleapis.com/auth/calendar
-https://www.googleapis.com/auth/calendar.readonly
-https://www.googleapis.com/auth/calendar.events
-https://www.googleapis.com/auth/forms.body
-https://www.googleapis.com/auth/forms.body.readonly
-https://www.googleapis.com/auth/forms.responses.readonly
-https://www.googleapis.com/auth/presentations
-https://www.googleapis.com/auth/presentations.readonly
+```powershell
+$SecretDir = Join-Path $env:LOCALAPPDATA "hardened-google-workspace-mcp"
+$SecretPath = Join-Path $SecretDir "client_secret.json"
+New-Item -ItemType Directory -Force $SecretDir | Out-Null
+Copy-Item "C:\Path\To\Downloaded\client_secret.json" $SecretPath
 ```
 
-3. Click **Update** at the bottom
-4. Click **Save and Continue**
+### macOS or Linux
 
-### Test Users (External only):
+```bash
+secret_dir="${XDG_CONFIG_HOME:-$HOME/.config}/hardened-google-workspace-mcp"
+mkdir -p "$secret_dir"
+cp /path/to/downloaded/client_secret.json "$secret_dir/client_secret.json"
+chmod 600 "$secret_dir/client_secret.json"
+```
 
-If you chose "External" user type:
-1. Click **Add Users**
-2. Add your email address
-3. Click **Save and Continue**
+Pass the resulting absolute path as `GOOGLE_CLIENT_SECRET_PATH`. Continue with [SETUP.md](./SETUP.md).
 
-> **Note:** While your app is in "Testing" status, only test users you add can authorize it.
+## 6. Verify authorization
 
-4. Click **Back to Dashboard**
+On the first Google Workspace tool call:
 
----
+1. Confirm the browser shows the intended Google Cloud project and OAuth client.
+2. Confirm the signed-in Google account is the intended account.
+3. Review the requested scopes.
+4. Complete consent.
+5. Return to Claude Code and verify the tool result.
 
-## Step 4: Create OAuth Credentials
-
-1. Go to **APIs & Services > Credentials** (or use [this link](https://console.cloud.google.com/apis/credentials))
-2. Click **Create Credentials** at the top
-3. Select **OAuth client ID**
-
-### Configure the OAuth client:
-
-- **Application type:** `Desktop app`
-- **Name:** `Claude Code MCP` (or any name you prefer)
-
-4. Click **Create**
-
-### Copy Your Credentials
-
-A dialog will appear with your credentials:
-
-- **Client ID:** Looks like `123456789-abcdefg.apps.googleusercontent.com`
-- **Client Secret:** Looks like `GOCSPX-xxxxxxxxx`
-
-**Important:** Copy both values and store them securely. You'll need them when configuring Claude Code.
-
-You can also click **Download JSON** to save a backup.
-
----
-
-## Step 5: Use Your Credentials
-
-Now that you have your credentials, go back to **[SETUP.md](./SETUP.md)** and continue from Step 2.
-
-When you reach the configuration step, use:
-- `GOOGLE_OAUTH_CLIENT_ID` = your Client ID
-- `GOOGLE_OAUTH_CLIENT_SECRET` = your Client Secret
-
----
+Google supports granular consent. The application must tolerate missing scopes by disabling or failing the affected tool rather than assuming every requested permission was granted.
 
 ## Troubleshooting
 
-### "Access blocked: This app's request is invalid"
+### `Access blocked` or `request is invalid`
 
-This usually means the OAuth consent screen isn't fully configured. Make sure you:
-1. Completed the OAuth consent screen setup
-2. Added the required scopes
-3. If using "External" type, added yourself as a test user
+Confirm:
 
-### "This app isn't verified"
+- OAuth client type is **Desktop app**;
+- the consent screen is complete;
+- the current user is an allowed test user;
+- every required API is enabled;
+- the JSON path points to the downloaded file for the intended project.
 
-This warning is expected for apps in testing mode. Click **Continue** to proceed. Google only verifies apps that are published for public use.
+### `This app isn't verified`
 
-### "Access blocked: Authorization Error"
+A private External app in Testing mode can show an unverified-app warning. Use only a project and OAuth client you control. Public distribution may require Google's verification process.
 
-Check that:
-1. You enabled all the required APIs (Step 2)
-2. The OAuth client type is "Desktop app"
-3. You're signing in with an account that has access (test user for External apps)
+### Wrong account or scopes
 
-### Need to start over?
+Revoke the application in Google Account permissions and authorize again with the correct account. Do not reuse a token from another Google account or OAuth project.
 
-You can delete the OAuth client and create a new one. Go to **Credentials**, find your OAuth client, click the trash icon, and start Step 4 again.
+### Client JSON exposed
 
----
+Treat a committed or disclosed client secret as compromised. Create a replacement OAuth client, update the external JSON path, verify authorization, and revoke/delete the old client only after the replacement works.
 
-## Security Notes
+## Security rules
 
-- **Keep your Client Secret confidential.** Never commit it to public repositories or share it publicly.
-- **Rotate credentials** if you suspect they've been exposed. Delete the old OAuth client and create a new one.
-- **Review authorized apps** periodically at [myaccount.google.com/permissions](https://myaccount.google.com/permissions)
+- Never commit the OAuth JSON.
+- Never paste `client_secret` into chat, logs, issues, `.mcp.json`, or `~/.claude.json`.
+- Never place the JSON under the repository root.
+- Keep the OAuth project in Testing mode unless public verification and policy requirements are intentionally completed.
+- Periodically review Google Account permissions and remove unused clients.
