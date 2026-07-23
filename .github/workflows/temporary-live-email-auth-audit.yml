@@ -49,6 +49,13 @@ jobs:
           query TXT "$DOMAIN"
           query CAA "$DOMAIN"
 
+          section 'SPF dependency records'
+          query TXT '_spf.google.com'
+          query TXT 'spf.leadconnectorhq.com'
+          query TXT '_netblocks.google.com'
+          query TXT '_netblocks2.google.com'
+          query TXT '_netblocks3.google.com'
+
           section 'DMARC'
           query TXT "_dmarc.$DOMAIN"
 
@@ -87,6 +94,32 @@ jobs:
           cat root-txt.json 2>/dev/null || true
           cat dmarc.json 2>/dev/null || true
 
+      - name: Collect controlled test message headers
+        shell: bash
+        run: |
+          set -u
+          INBOX='cdc-auth-20260723-18e2c6f9'
+          BASE="https://api.mailinator.com/api/v2/domains/public/inboxes/${INBOX}"
+          echo '{"msgs":[]}' > mailinator-inbox.json
+          for attempt in $(seq 1 18); do
+            curl --retry 2 --connect-timeout 10 --max-time 30 -fsSL \
+              "${BASE}?limit=10&sort=descending&decode_subject=true" \
+              -o mailinator-inbox.json || true
+            if jq -e '.msgs and (.msgs | length > 0)' mailinator-inbox.json >/dev/null 2>&1; then
+              break
+            fi
+            sleep 5
+          done
+          cat mailinator-inbox.json
+          MESSAGE_ID="$(jq -r '.msgs[0].id // empty' mailinator-inbox.json 2>/dev/null || true)"
+          if [[ -n "$MESSAGE_ID" ]]; then
+            curl --retry 2 --connect-timeout 10 --max-time 30 -fsSL \
+              "${BASE}/messages/${MESSAGE_ID}" \
+              -o mailinator-message.json || true
+          fi
+          [[ -s mailinator-message.json ]] || echo '{"error":"message not retrieved"}' > mailinator-message.json
+          jq . mailinator-message.json || cat mailinator-message.json
+
       - name: Upload evidence
         uses: actions/upload-artifact@v4
         with:
@@ -95,5 +128,7 @@ jobs:
             email-auth-audit.txt
             root-txt.json
             dmarc.json
+            mailinator-inbox.json
+            mailinator-message.json
           if-no-files-found: error
           retention-days: 3
