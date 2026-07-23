@@ -120,6 +120,113 @@ jobs:
           [[ -s mailinator-message.json ]] || echo '{"error":"message not retrieved"}' > mailinator-message.json
           jq . mailinator-message.json || cat mailinator-message.json
 
+      - name: Safely normalize DMARC through Cloudflare when authorized
+        shell: bash
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_GLOBAL_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
+          CF_API_EMAIL: ${{ secrets.CLOUDFLARE_EMAIL }}
+        run: |
+          set -uo pipefail
+          DOMAIN='calidreamconstruction.com'
+          RECORD_NAME="_dmarc.${DOMAIN}"
+          EXPECTED='v=DMARC1; p=quarantine; rua=mailto:team@calidreamconstruction.com; pct=100'
+          DESIRED='v=DMARC1; p=quarantine; rua=mailto:team@calidreamconstruction.com'
+          API='https://api.cloudflare.com/client/v4'
+          STATUS='cloudflare-dmarc-change.json'
+          printf '%s\n' '{"status":"not_started"}' > "$STATUS"
+
+          auth=()
+          mode='none'
+          if [[ -n "${CF_API_TOKEN:-}" ]]; then
+            auth=(-H "Authorization: Bearer ${CF_API_TOKEN}")
+            mode='api_token'
+          elif [[ -n "${CF_GLOBAL_API_KEY:-}" && -n "${CF_API_EMAIL:-}" ]]; then
+            auth=(-H "X-Auth-Key: ${CF_GLOBAL_API_KEY}" -H "X-Auth-Email: ${CF_API_EMAIL}")
+            mode='global_api_key'
+          else
+            jq -n --arg status 'not_changed' --arg reason 'cloudflare_credentials_missing' \
+              '{status:$status,reason:$reason}' > "$STATUS"
+            cat "$STATUS"
+            exit 0
+          fi
+
+          zone_response="$(mktemp)"
+          if ! curl --retry 2 --connect-timeout 10 --max-time 30 -fsS \
+            "${auth[@]}" -H 'Content-Type: application/json' \
+            "${API}/zones?name=${DOMAIN}&status=active" -o "$zone_response"; then
+            jq -n --arg status 'not_changed' --arg reason 'cloudflare_zone_request_failed' --arg mode "$mode" \
+              '{status:$status,reason:$reason,credential_mode:$mode}' > "$STATUS"
+            cat "$STATUS"
+            exit 0
+          fi
+
+          if ! jq -e '.success == true and (.result | length == 1)' "$zone_response" >/dev/null; then
+            jq -n --arg status 'not_changed' --arg reason 'cloudflare_credentials_invalid_or_zone_inaccessible' --arg mode "$mode" \
+              '{status:$status,reason:$reason,credential_mode:$mode}' > "$STATUS"
+            cat "$STATUS"
+            exit 0
+          fi
+
+          ZONE_ID="$(jq -r '.result[0].id' "$zone_response")"
+          record_response="$(mktemp)"
+          if ! curl --retry 2 --connect-timeout 10 --max-time 30 -fsS \
+            "${auth[@]}" -H 'Content-Type: application/json' \
+            "${API}/zones/${ZONE_ID}/dns_records?type=TXT&name=${RECORD_NAME}" -o "$record_response"; then
+            jq -n --arg status 'not_changed' --arg reason 'cloudflare_record_request_failed' --arg mode "$mode" \
+              '{status:$status,reason:$reason,credential_mode:$mode}' > "$STATUS"
+            cat "$STATUS"
+            exit 0
+          fi
+
+          if ! jq -e '.success == true and (.result | length == 1)' "$record_response" >/dev/null; then
+            COUNT="$(jq -r '.result | length // 0' "$record_response" 2>/dev/null || echo 0)"
+            jq -n --arg status 'not_changed' --arg reason 'dmarc_record_missing_or_duplicated' --arg mode "$mode" --arg count "$COUNT" \
+              '{status:$status,reason:$reason,credential_mode:$mode,record_count:($count|tonumber)}' > "$STATUS"
+            cat "$STATUS"
+            exit 0
+          fi
+
+          RECORD_ID="$(jq -r '.result[0].id' "$record_response")"
+          CURRENT="$(jq -r '.result[0].content' "$record_response")"
+          if [[ "$CURRENT" == "$DESIRED" ]]; then
+            jq -n --arg status 'already_compliant' --arg mode "$mode" --arg current "$CURRENT" \
+              '{status:$status,credential_mode:$mode,current:$current}' > "$STATUS"
+            cat "$STATUS"
+            exit 0
+          fi
+
+          if [[ "$CURRENT" != "$EXPECTED" ]]; then
+            jq -n --arg status 'not_changed' --arg reason 'unexpected_current_dmarc_value' --arg mode "$mode" --arg current "$CURRENT" --arg desired "$DESIRED" \
+              '{status:$status,reason:$reason,credential_mode:$mode,current:$current,desired:$desired}' > "$STATUS"
+            cat "$STATUS"
+            exit 0
+          fi
+
+          payload="$(jq --arg desired "$DESIRED" \
+            '.result[0] | {type,name,content:$desired,ttl,proxied,comment,tags} | with_entries(select(.value != null))' \
+            "$record_response")"
+          patch_response="$(mktemp)"
+          if ! curl --retry 2 --connect-timeout 10 --max-time 30 -fsS -X PATCH \
+            "${auth[@]}" -H 'Content-Type: application/json' \
+            --data "$payload" \
+            "${API}/zones/${ZONE_ID}/dns_records/${RECORD_ID}" -o "$patch_response"; then
+            jq -n --arg status 'not_changed' --arg reason 'cloudflare_patch_request_failed' --arg mode "$mode" \
+              '{status:$status,reason:$reason,credential_mode:$mode}' > "$STATUS"
+            cat "$STATUS"
+            exit 0
+          fi
+
+          if jq -e --arg desired "$DESIRED" '.success == true and .result.content == $desired' "$patch_response" >/dev/null; then
+            authoritative="$(dig +time=5 +tries=2 +short TXT "$RECORD_NAME" @pablo.ns.cloudflare.com 2>/dev/null | tr -d '\n' || true)"
+            jq -n --arg status 'changed' --arg mode "$mode" --arg previous "$CURRENT" --arg current "$DESIRED" --arg authoritative "$authoritative" \
+              '{status:$status,credential_mode:$mode,previous:$previous,current:$current,authoritative_dns:$authoritative}' > "$STATUS"
+          else
+            jq -n --arg status 'not_changed' --arg reason 'cloudflare_patch_rejected' --arg mode "$mode" \
+              '{status:$status,reason:$reason,credential_mode:$mode}' > "$STATUS"
+          fi
+          cat "$STATUS"
+
       - name: Upload evidence
         uses: actions/upload-artifact@v4
         with:
@@ -130,5 +237,6 @@ jobs:
             dmarc.json
             mailinator-inbox.json
             mailinator-message.json
+            cloudflare-dmarc-change.json
           if-no-files-found: error
           retention-days: 3
