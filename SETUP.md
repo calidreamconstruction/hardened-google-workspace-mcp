@@ -1,231 +1,169 @@
-# Setup Guide: Hardened Google Workspace MCP for Claude Code
+# Cross-Platform Setup
 
-This guide will help you connect Claude Code to your Google Workspace (Gmail, Drive, Docs, etc.).
+This guide installs the hardened local MCP server without placing OAuth secrets in the repository or in Claude's MCP JSON.
 
-**Time required:** About 15-20 minutes
+## 1. Install prerequisites
 
----
+Required:
 
-## Before You Start
+- Python 3.10+
+- Git
+- `uv`
+- Claude Code
+- A browser for Google consent
+- A supported native keyring backend
 
-Make sure you have:
-- [ ] Claude Code installed and working
-- [ ] A Google Workspace account (or personal Google account)
-- [ ] Access to Google Cloud Console to create OAuth credentials
+Verify:
 
----
-
-## Step 1: Create Google OAuth Credentials
-
-Follow the instructions in **[OAUTH_SETUP.md](./OAUTH_SETUP.md)** to create your own OAuth credentials.
-
-You'll need:
-- `GOOGLE_OAUTH_CLIENT_ID`
-- `GOOGLE_OAUTH_CLIENT_SECRET`
-
-Keep these values handy for Step 4.
-
----
-
-## Step 2: Install Python (if you don't have it)
-
-Open **Terminal** (press `Cmd + Space`, type "Terminal", hit Enter).
-
-Check if Python is installed:
-```bash
-python3 --version
+```powershell
+python --version
+uv --version
+claude --version
 ```
 
-If you see a version number (like `Python 3.11.4`), skip to Step 3.
+## 2. Clone the maintained fork
 
-If you get "command not found", install Python:
-```bash
-# Install Homebrew first (if you don't have it)
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+### Windows PowerShell
 
-# Then install Python
-brew install python
-```
-
----
-
-## Step 3: Install uv (Python package manager)
-
-In Terminal, run:
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Then close and reopen Terminal (or run `source ~/.zshrc`).
-
----
-
-## Step 4: Set Up the Workspace Server
-
-**4a.** Clone the repository to your home folder:
-```bash
-git clone https://github.com/c0webster/hardened-google-workspace-mcp.git ~/hardened-google-workspace-mcp
-```
-
-**4b.** Install the dependencies:
-```bash
-cd ~/hardened-google-workspace-mcp
+```powershell
+$Repo = Join-Path $HOME "src\hardened-google-workspace-mcp"
+git clone https://github.com/calidreamconstruction/hardened-google-workspace-mcp.git $Repo
+Set-Location $Repo
 uv sync
 ```
 
-You should see it download and install packages. This takes a minute or two.
-
----
-
-## Step 5: Configure Claude Code
-
-Choose **one** of these options:
-
-### Option A: Using `claude mcp add` (recommended)
-
-This is the easiest method. Run this command in Terminal:
+### macOS or Linux
 
 ```bash
-claude mcp add hardened-workspace \
+repo="$HOME/src/hardened-google-workspace-mcp"
+git clone https://github.com/calidreamconstruction/hardened-google-workspace-mcp.git "$repo"
+cd "$repo"
+uv sync
+```
+
+## 3. Create and store the OAuth Desktop-app JSON
+
+Complete [OAUTH_SETUP.md](./OAUTH_SETUP.md), then download the OAuth client JSON.
+
+### Windows
+
+```powershell
+$SecretDir = Join-Path $env:LOCALAPPDATA "hardened-google-workspace-mcp"
+$SecretPath = Join-Path $SecretDir "client_secret.json"
+New-Item -ItemType Directory -Force $SecretDir | Out-Null
+Copy-Item "C:\Path\To\Downloaded\client_secret.json" $SecretPath
+```
+
+### macOS or Linux
+
+```bash
+secret_dir="${XDG_CONFIG_HOME:-$HOME/.config}/hardened-google-workspace-mcp"
+mkdir -p "$secret_dir"
+cp /path/to/downloaded/client_secret.json "$secret_dir/client_secret.json"
+chmod 600 "$secret_dir/client_secret.json"
+```
+
+The file must remain outside the Git checkout. Never paste `client_secret` into `.mcp.json`, `~/.claude.json`, issue comments, logs, shell history, or chat.
+
+## 4. Register the MCP server
+
+### Windows PowerShell
+
+```powershell
+claude mcp add `
+  --transport stdio `
+  --scope user `
+  --env "GOOGLE_CLIENT_SECRET_PATH=$SecretPath" `
+  hardened-workspace `
+  -- uv run --directory $Repo hardened-google-workspace-mcp --single-user
+```
+
+### macOS or Linux
+
+```bash
+claude mcp add \
+  --transport stdio \
   --scope user \
-  -e GOOGLE_OAUTH_CLIENT_ID="YOUR_CLIENT_ID" \
-  -e GOOGLE_OAUTH_CLIENT_SECRET="YOUR_CLIENT_SECRET" \
-  -- uv run --directory ~/hardened-google-workspace-mcp python -m main --single-user
+  --env "GOOGLE_CLIENT_SECRET_PATH=$secret_dir/client_secret.json" \
+  hardened-workspace \
+  -- uv run --directory "$repo" hardened-google-workspace-mcp --single-user
 ```
 
-Replace `YOUR_CLIENT_ID` and `YOUR_CLIENT_SECRET` with the values from Step 1.
+Use user scope for a private machine-wide utility. Do not commit a user-specific OAuth path to a project `.mcp.json`.
 
-The `--scope user` flag makes this available in all your projects.
+## 5. Verify the exact definition
 
-> **Note:** If you put the folder somewhere other than `~/hardened-google-workspace-mcp`, replace that path in the command above.
-
-### Option B: Manual config file
-
-**5a.** Create the Claude config folder (if it doesn't exist):
-```bash
-mkdir -p ~/.claude
+```powershell
+claude mcp get hardened-workspace
+claude mcp list
 ```
 
-**5b.** Create the config file:
-```bash
-open -e ~/.claude/mcp_config.json
+Confirm:
+
+- command is `uv`;
+- repository path is the current local clone;
+- executable is `hardened-google-workspace-mcp`;
+- `--single-user` is present;
+- environment contains only `GOOGLE_CLIENT_SECRET_PATH`, not a secret value.
+
+## 6. Authorize Google
+
+Open Claude Code, run `/mcp`, and invoke one read-only Workspace tool. Complete the browser consent flow with the intended Google account.
+
+After consent:
+
+- access and refresh tokens are written to the native credential manager;
+- Windows payloads are split into verified chunks;
+- the manifest is committed only after every chunk round-trips correctly;
+- missing or altered chunks fail closed;
+- no new plaintext token file is created.
+
+## 7. Upgrade an existing PC installation
+
+```powershell
+Set-Location $Repo
+git pull --ff-only
+uv sync
+claude mcp get hardened-workspace
 ```
 
-**5c.** Paste this content (replace `YOUR_USERNAME` with your macOS username - run `whoami` in Terminal to find it):
+Restart Claude Code after changing the executable definition.
 
-```json
-{
-  "mcpServers": {
-    "hardened-workspace": {
-      "command": "uv",
-      "args": ["run", "--directory", "/Users/YOUR_USERNAME/hardened-google-workspace-mcp", "python", "-m", "main", "--single-user"],
-      "env": {
-        "GOOGLE_OAUTH_CLIENT_ID": "YOUR_CLIENT_ID",
-        "GOOGLE_OAUTH_CLIENT_SECRET": "YOUR_CLIENT_SECRET"
-      }
-    }
-  }
-}
-```
+Version 1.8.0 can migrate:
 
-Replace `YOUR_CLIENT_ID` and `YOUR_CLIENT_SECRET` with the values from Step 1.
+1. a legacy one-entry keyring record; or
+2. a v1.7.1 local JSON fallback record.
 
-**5d.** Save and close the file (`Cmd + S`, then `Cmd + W`).
-
----
-
-## Step 6: Restart Claude Code
-
-Completely quit Claude Code (`Cmd + Q`) and reopen it.
-
----
-
-## Step 7: Authorize with Google
-
-The first time you use a Google feature, Claude will open your browser.
-
-1. Sign in with your **Google account**
-2. Click **"Continue"** on the security warning (it's expected for apps in testing mode)
-3. Click **"Allow"** to grant permissions
-4. Close the browser tab and return to Claude Code
-
----
-
-## Step 8: Add Safety Instructions (Recommended)
-
-Add these instructions to your `CLAUDE.md` file so Claude is more careful with your Google data.
-
-**If you don't have a CLAUDE.md yet:**
-```bash
-cp ~/hardened-google-workspace-mcp/CLAUDE_TEMPLATE.md ~/CLAUDE.md
-```
-
-**If you already have a CLAUDE.md**, add these lines to it:
-```markdown
-## Google Workspace Safety
-
-When using Google Workspace tools (Gmail, Drive, Docs, Calendar, etc.):
-- Always tell me exactly what you're about to do before doing it
-- For any action that creates, modifies, or deletes data, ask for my confirmation first
-- Show me the specific details (recipient, document name, calendar event, etc.)
-```
-
-> **Why?** This makes Claude pause and explain before taking actions on your Google account, giving you a chance to catch mistakes.
-
----
-
-## You're Done!
-
-Try asking Claude:
-- "Show me my recent emails"
-- "What's on my calendar this week?"
-- "Find the document called [something] in my Drive"
-
----
-
-## Updating
-
-To get the latest version, run:
-```bash
-cd ~/hardened-google-workspace-mcp && git pull && uv sync
-```
-
-Then restart Claude Code (`Cmd + Q` and reopen).
-
----
+Migration writes and verifies the chunked native-keyring record first. The legacy record is removed afterward. If the secure commit or local-file deletion fails, the operation fails closed.
 
 ## Troubleshooting
 
-### "MCP server not found" or similar errors
-- Make sure you restarted Claude Code after Step 6
-- Check that the path in `mcp_config.json` is correct (no typos!)
+### `Untrusted keyring backend`
 
-### Browser doesn't open for Google login
-- Look in Claude Code's output for a URL you can copy/paste manually
+The runtime refuses plaintext or unknown keyring backends. Use Windows Credential Manager, macOS Keychain, Linux SecretService, or KWallet.
 
-### "Permission denied" after previously working
-```bash
-rm -rf ~/.credentials/workspace-mcp/
+### `credential chunk is missing` or `digest mismatch`
+
+The stored generation is incomplete or corrupted. Do not bypass the integrity check. Revoke the app at Google Account permissions, remove the affected native credential entries, and authorize again.
+
+### Browser does not open
+
+Use the authorization URL printed by the local server. Confirm the OAuth client type is **Desktop app** and the current account is an allowed test user.
+
+### Server closes immediately
+
+Run the canonical command directly:
+
+```powershell
+uv run --directory $Repo hardened-google-workspace-mcp --single-user
 ```
-Then restart Claude Code and re-authorize.
 
-### Need help?
-File an issue on the [GitHub repository](https://github.com/c0webster/hardened-google-workspace-mcp/issues).
+Fix the first startup error, then recheck `claude mcp get hardened-workspace`.
 
----
+### Remove the server definition
 
-## What Claude Can (and Can't) Do
+```powershell
+claude mcp remove hardened-workspace
+```
 
-**Claude CAN:**
-- Read your emails and create drafts
-- Read and edit Google Docs, Sheets, and Slides
-- View and create calendar events (cannot add attendees - must be done manually in Calendar UI)
-- Search and read files in your Drive
-
-**Claude CANNOT:**
-- Send emails (you must open Gmail and click Send yourself)
-- Share files with external users
-- Add attendees to calendar events (you must add them in Google Calendar UI)
-- Delete your files or emails permanently
-
-This is intentional for security. See SECURITY.md for details.
+Removing the MCP definition does not revoke Google access. Revoke the application separately in your Google Account permissions when decommissioning it.
