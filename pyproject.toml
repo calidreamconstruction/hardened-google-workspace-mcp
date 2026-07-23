@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hardened-google-workspace-mcp"
-version = "1.8.0"
+version = "1.7.1"
 description = "Security-hardened Google Workspace MCP Server for Claude Code - Gmail, Docs, Sheets, Slides, Calendar, Forms & Drive with exfiltration vectors removed"
 readme = "README.md"
 keywords = ["mcp", "google", "workspace", "llm", "ai", "claude", "model", "context", "protocol", "server"]
@@ -20,7 +20,7 @@ dependencies = [
     "keyring>=25.0.0",
     "py-key-value-aio>=0.3.0",
     "pyjwt>=2.10.1",
-    "python-dotenv>=1.2.2",
+    "python-dotenv>=1.1.0",
     "pyyaml>=6.0.2",
 ]
 classifiers = [
