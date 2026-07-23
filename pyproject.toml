@@ -1,27 +1,27 @@
 [build-system]
-requires = [ "setuptools>=61.0", "wheel"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "hardened-google-workspace-mcp"
-version = "1.7.1"
+version = "1.8.0"
 description = "Security-hardened Google Workspace MCP Server for Claude Code - Gmail, Docs, Sheets, Slides, Calendar, Forms & Drive with exfiltration vectors removed"
 readme = "README.md"
-keywords = [ "mcp", "google", "workspace", "llm", "ai", "claude", "model", "context", "protocol", "server"]
+keywords = ["mcp", "google", "workspace", "llm", "ai", "claude", "model", "context", "protocol", "server"]
 requires-python = ">=3.10"
 dependencies = [
- "cryptography>=45.0.0",
- "fastapi>=0.115.12",
- "fastmcp>=2.14.0",
- "google-api-python-client>=2.168.0",
- "google-auth-httplib2>=0.2.0",
- "google-auth-oauthlib>=1.2.2",
- "httpx>=0.28.1",
- "keyring>=25.0.0",
- "py-key-value-aio>=0.3.0",
- "pyjwt>=2.10.1",
- "python-dotenv>=1.1.0",
- "pyyaml>=6.0.2",
+    "cryptography>=45.0.0",
+    "fastapi>=0.115.12",
+    "fastmcp>=2.14.0",
+    "google-api-python-client>=2.168.0",
+    "google-auth-httplib2>=0.2.0",
+    "google-auth-oauthlib>=1.2.2",
+    "httpx>=0.28.1",
+    "keyring>=25.0.0",
+    "py-key-value-aio>=0.3.0",
+    "pyjwt>=2.10.1",
+    "python-dotenv>=1.2.2",
+    "pyyaml>=6.0.2",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -32,6 +32,7 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
@@ -40,25 +41,30 @@ classifiers = [
     "Topic :: Communications :: Chat",
     "Topic :: Office/Business",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    "Typing :: Typed"
+    "Typing :: Typed",
 ]
 
 [[project.authors]]
 name = "Taylor Wilsdon"
 email = "taylor@taylorwilsdon.com"
 
+[[project.maintainers]]
+name = "Cali Dream Construction"
+email = "team@calidreamconstruction.com"
+
 [project.license]
 text = "MIT"
 
 [project.urls]
-Homepage = "https://workspacemcp.com"
-Repository = "https://github.com/taylorwilsdon/google_workspace_mcp"
-Documentation = "https://github.com/taylorwilsdon/google_workspace_mcp#readme"
-Issues = "https://github.com/taylorwilsdon/google_workspace_mcp/issues"
-Changelog = "https://github.com/taylorwilsdon/google_workspace_mcp/releases"
+Homepage = "https://github.com/calidreamconstruction/hardened-google-workspace-mcp"
+Repository = "https://github.com/calidreamconstruction/hardened-google-workspace-mcp"
+Documentation = "https://github.com/calidreamconstruction/hardened-google-workspace-mcp#readme"
+Issues = "https://github.com/calidreamconstruction/hardened-google-workspace-mcp/issues"
+Changelog = "https://github.com/calidreamconstruction/hardened-google-workspace-mcp/releases"
+Upstream = "https://github.com/taylorwilsdon/google_workspace_mcp"
 
 [project.scripts]
-hardened-google-workspace-mcp = "main:main"
+hardened-google-workspace-mcp = "secure_main:main"
 
 [project.optional-dependencies]
 valkey = [
@@ -105,7 +111,7 @@ dev = [
 ]
 
 [tool.setuptools]
-py-modules = ["main"]
+py-modules = ["main", "secure_main"]
 
 [tool.setuptools.packages.find]
 where = ["."]
