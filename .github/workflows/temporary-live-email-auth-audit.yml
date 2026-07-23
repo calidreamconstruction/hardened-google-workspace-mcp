@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - ops/live-email-auth-audit-20260723
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
