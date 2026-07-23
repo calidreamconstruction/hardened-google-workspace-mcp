@@ -116,10 +116,10 @@ Upgrade and restart Claude Code:
 ```powershell
 Set-Location $Repo
 git pull --ff-only
-uv sync
+uv sync --locked
 ```
 
-Version 1.8.0 no longer writes oversized Windows OAuth payloads to `~/.google_workspace_mcp/credentials`. If a v1.7.1 plaintext fallback file exists, the secure store reads it once, commits and verifies the chunked native-keyring generation, then removes the file. If migration or deletion cannot be proven, authentication fails closed and the file is retained for recovery rather than silently discarded.
+The hardened runtime no longer writes oversized Windows OAuth payloads to `~/.google_workspace_mcp/credentials`. If a v1.7.1 plaintext fallback file exists, the secure store reads it once, commits and verifies the chunked native-keyring generation, then removes the file. If migration or deletion cannot be proven, authentication fails closed and the file is retained for recovery rather than silently discarded.
 
 ## Example prompts
 
@@ -158,9 +158,10 @@ Then verify `claude mcp get hardened-workspace` points to the same absolute repo
 ## Development
 
 ```bash
-uv sync --group dev
-uv run python -m py_compile auth/secure_credential_store.py secure_main.py
-uv run python tests/test_secure_credential_store.py -q
+uv sync --locked --group dev
+uv run --locked python -m py_compile auth/secure_credential_store.py secure_main.py
+uv run --locked python tests/test_secure_credential_store.py -q
+uv run --locked python tests/test_secure_package_contract.py -q
 ```
 
 ## Support
