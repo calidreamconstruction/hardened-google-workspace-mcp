@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SECURE_MAIN_PATH = ROOT / "secure_main.py"
@@ -20,24 +23,45 @@ class SecurePackageContractTests(unittest.TestCase):
         self.assertIn(
             'hardened-google-workspace-mcp = "secure_main:main"', pyproject
         )
-        self.assertIn('version = "1.8.0"', pyproject)
-        self.assertIn('"python-dotenv>=1.2.2"', pyproject)
+        self.assertIn('version = "1.7.1"', pyproject)
+        self.assertIn('"python-dotenv>=1.1.0"', pyproject)
         self.assertIn(
             "github.com/calidreamconstruction/hardened-google-workspace-mcp",
             pyproject,
         )
+
+    def test_lock_matches_project_identity_and_secure_dotenv_floor(self) -> None:
+        lock = (ROOT / "uv.lock").read_text(encoding="utf-8")
+        root = lock.split(
+            'name = "hardened-google-workspace-mcp"', 1
+        )[1].split("[[package]]", 1)[0]
+        dotenv = lock.split('name = "python-dotenv"', 1)[1].split(
+            "[[package]]", 1
+        )[0]
+        self.assertIn('version = "1.7.1"', root)
+        self.assertIn(
+            '{ name = "python-dotenv", specifier = ">=1.1.0" }', root
+        )
+        self.assertRegex(dotenv, r'version = "1\.2\.[1-9][0-9]*"')
 
     def test_bootstrap_enforces_security_before_importing_server(self) -> None:
         source = SECURE_MAIN_PATH.read_text(encoding="utf-8")
         import_main = source.index("from main import main as upstream_main")
         for required in (
             'PYTHON_DOTENV_DISABLED", "1"',
+            "disable_dotenv_loading()",
             "validated_client_secret_path(",
             'os.environ.pop("GOOGLE_OAUTH_CLIENT_ID", None)',
             'os.environ.pop("GOOGLE_OAUTH_CLIENT_SECRET", None)',
             "install_secure_credential_store()",
         ):
             self.assertLess(source.index(required), import_main)
+
+    def test_dotenv_loader_is_replaced_before_legacy_import(self) -> None:
+        fake_dotenv = types.SimpleNamespace(load_dotenv=lambda *_a, **_k: True)
+        with mock.patch.dict(sys.modules, {"dotenv": fake_dotenv}):
+            SECURE_MAIN.disable_dotenv_loading()
+        self.assertFalse(fake_dotenv.load_dotenv("ignored.env", override=True))
 
     def test_oauth_json_must_be_absolute_existing_and_external(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "required"):
