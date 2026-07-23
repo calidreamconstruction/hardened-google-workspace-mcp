@@ -29,7 +29,7 @@ claude --version
 $Repo = Join-Path $HOME "src\hardened-google-workspace-mcp"
 git clone https://github.com/calidreamconstruction/hardened-google-workspace-mcp.git $Repo
 Set-Location $Repo
-uv sync
+uv sync --locked
 ```
 
 ### macOS or Linux
@@ -38,7 +38,7 @@ uv sync
 repo="$HOME/src/hardened-google-workspace-mcp"
 git clone https://github.com/calidreamconstruction/hardened-google-workspace-mcp.git "$repo"
 cd "$repo"
-uv sync
+uv sync --locked
 ```
 
 ## 3. Create and store the OAuth Desktop-app JSON
@@ -123,13 +123,13 @@ After consent:
 ```powershell
 Set-Location $Repo
 git pull --ff-only
-uv sync
+uv sync --locked
 claude mcp get hardened-workspace
 ```
 
 Restart Claude Code after changing the executable definition.
 
-Version 1.8.0 can migrate:
+The secure runtime can migrate:
 
 1. a legacy one-entry keyring record; or
 2. a v1.7.1 local JSON fallback record.
