@@ -44,6 +44,21 @@ class SecurePackageContractTests(unittest.TestCase):
         )
         self.assertRegex(dotenv, r'version = "1\.2\.[1-9][0-9]*"')
 
+    def test_ci_proves_locked_install_and_secure_entry_point(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "secure-credentials.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b",
+            workflow,
+        )
+        self.assertIn('version: "0.11.31"', workflow)
+        self.assertIn("uv sync --locked --no-dev", workflow)
+        self.assertIn("uv run --locked python -c", workflow)
+        self.assertIn("secure_main:main", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("contents: read", workflow)
+
     def test_bootstrap_enforces_security_before_importing_server(self) -> None:
         source = SECURE_MAIN_PATH.read_text(encoding="utf-8")
         import_main = source.index("from main import main as upstream_main")
