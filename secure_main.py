@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 _DOTENV_DISABLE = ("PYTHON_DOTENV_DISABLED", "1")
 
@@ -38,9 +39,28 @@ def disable_dotenv_loading() -> None:
     dotenv.load_dotenv = disabled_load_dotenv
 
 
+def validate_runtime_arguments(argv: Sequence[str]) -> None:
+    """Keep the hardened executable on its supported local stdio boundary."""
+    arguments = list(argv[1:])
+    if "--single-user" not in arguments:
+        raise RuntimeError("hardened entrypoint requires --single-user")
+
+    transport = "stdio"
+    for index, argument in enumerate(arguments):
+        if argument == "--transport":
+            if index + 1 >= len(arguments):
+                raise RuntimeError("--transport requires a value")
+            transport = arguments[index + 1]
+        elif argument.startswith("--transport="):
+            transport = argument.split("=", 1)[1]
+    if transport != "stdio":
+        raise RuntimeError("hardened entrypoint supports stdio transport only")
+
+
 def main() -> object:
     # The supported runtime never imports repository-local dotenv values or raw
     # OAuth client credentials from process variables.
+    validate_runtime_arguments(sys.argv)
     os.environ[_DOTENV_DISABLE[0]] = _DOTENV_DISABLE[1]
     disable_dotenv_loading()
     secret_path = validated_client_secret_path(
