@@ -1,223 +1,109 @@
-# Hardened Google Workspace MCP - Security Documentation
+# Security Model
 
-This is a **security-hardened fork** of the google_workspace_mcp server, designed for use with Claude Code.
+Hardened Google Workspace MCP reduces the Google Workspace actions available to an AI client and protects OAuth tokens at rest. It does not make untrusted email, documents, links, or prompts safe.
 
-## ⚠️ Important Security Notice
+## Threat model
 
-**This server reduces but does NOT eliminate data exfiltration risk.**
+Assume that content read from Gmail, Drive, Docs, Sheets, Forms, Slides, and Calendar can contain malicious instructions intended to manipulate the model. Retrieved content is data, not authority.
 
-While we've removed dangerous Google Workspace operations, Claude Code has access to many other tools that could be used for data exfiltration:
-- **Web requests** - Claude can make HTTP requests to external servers
-- **File operations** - Claude can write files that may sync to cloud storage (Dropbox, iCloud, etc.)
-- **Other MCP servers** - Other installed MCP tools may have exfiltration capabilities
-- **Code execution** - Claude can write and execute code that calls external APIs
+The hardening boundary covers this MCP server only. Claude Code may also have browser, shell, file, network, plugin, or other MCP capabilities that can move data outside Google Workspace.
 
-**You must remain vigilant:**
-- Always review Claude's tool calls before approving them
-- Never run Claude Code with `--dangerously-skip-permissions`
-- Be suspicious of unexpected file writes, web requests, or code execution
-- Treat all content from external sources as potentially malicious (prompt injection risk)
+## Removed high-risk operations
 
-This hardening **only** secures the Google Workspace integration. Your overall security depends on the full set of tools Claude has access to.
+The maintained fork removes or blocks these Google Workspace operations:
 
-## Security Model
+- sending Gmail messages;
+- creating Gmail filters or forwarding rules;
+- sharing Drive files with external identities;
+- adding Calendar attendees;
+- moving Gmail messages or Drive files to trash;
+- operations that expose or mutate unsupported Chat, Tasks, or Search surfaces.
 
-This server is designed with the assumption that **prompt injection attacks are possible**. An attacker could potentially inject malicious instructions into documents, emails, or other content that Claude processes. To mitigate data exfiltration risks, we have removed all tools that could be used to send data outside your account.
+Gmail draft creation remains available, but sending requires a separate user action in Gmail.
 
-### Blocked Operations
+## OAuth client configuration
 
-The following tools have been **removed** from this fork:
+Use a Google OAuth **Desktop app** JSON file through `GOOGLE_CLIENT_SECRET_PATH`.
 
-#### Gmail - Blocked
-| Tool | Reason |
-|------|--------|
-| `send_gmail_message` | Primary exfiltration vector - could send sensitive data to external addresses |
-| `create_gmail_filter` | Could create auto-forwarding rules to exfiltrate incoming emails |
-| `delete_gmail_filter` | Could remove security monitoring filters |
+- Store the JSON outside the Git repository.
+- Pass only its absolute path to the MCP process.
+- Do not paste `client_secret` into `.mcp.json`, `~/.claude.json`, issue comments, logs, shell history, or chat.
+- Revoke and replace the OAuth client if its secret was committed or disclosed.
 
-#### Google Drive - Blocked
-| Tool | Reason |
-|------|--------|
-| `share_drive_file` | Could share sensitive files with external users |
-| `batch_share_drive_file` | Same risk as above, at scale |
-| `update_drive_permission` | Could escalate permissions or expose files externally |
-| `remove_drive_permission` | Could remove security restrictions |
-| `transfer_drive_ownership` | Could transfer ownership of sensitive files outside org |
+The installed `hardened-google-workspace-mcp` command enters through `secure_main.py`, which sets `PYTHON_DOTENV_DISABLED=1` before importing the upstream server. Repository-local `.env` loading is therefore disabled on the supported entrypoint.
 
-#### Services - Removed Entirely
-| Service | Reason |
-|---------|--------|
-| Google Chat | Not needed, reduces attack surface |
-| Google Tasks | Not needed, reduces attack surface |
-| Google Search | Not needed, reduces attack surface |
+Running `python -m main` is a legacy bypass and is not covered by this secure-entrypoint guarantee. Use the installed command or `python -m secure_main`.
 
-### Allowed Operations
+## OAuth token storage
 
-#### Gmail - Allowed
-- `list_gmail_messages` - Search/list emails
-- `get_gmail_message` - Read specific email
-- `list_gmail_drafts` - List drafts
-- `get_gmail_draft` - Read draft content
-- `draft_gmail_message` - Create new draft (**user must manually send**)
-- `update_gmail_draft` - Edit existing draft
-- `delete_gmail_draft` - Delete draft
-- `list_gmail_labels` - List labels
-- `list_gmail_filters` - Read-only view of existing filters
+OAuth access and refresh tokens are stored in a validated native credential manager:
 
-#### Google Drive - Allowed
-- `search_drive_files` - Search/list files
-- `list_drive_items` - List folder contents
-- `get_drive_file_content` - Read file content
-- `get_drive_file_download_url` - Get download URL
-- `create_drive_file` - Create new file
-- `update_drive_file` - Update file metadata
-- `get_drive_file_permissions` - Read-only view of permissions
-- `get_drive_shareable_link` - Get shareable link (read-only)
-- `check_drive_file_public_access` - Check if file is public
+- Windows Credential Manager;
+- macOS Keychain;
+- Linux SecretService or KWallet.
 
-#### Google Docs - Allowed (all operations)
-- Read and edit documents
+Plaintext, null, chainer, and unknown keyring backends are rejected at startup.
 
-#### Google Sheets - Allowed (all operations)
-- Read and write spreadsheet data
+### Windows-safe chunking
 
-#### Google Calendar - Allowed (limited)
-- List, read, create, update, delete calendar events
-- **Cannot add attendees** - Event attendees trigger automatic email invitations from Google, creating an exfiltration vector. Users must add attendees manually in Calendar UI.
+A Google OAuth payload can exceed the per-entry size accepted by Windows Credential Manager. Version 1.8.0 does not fall back to a new token file. It:
 
-#### Google Forms - Allowed (all operations)
-- Read form structure and responses
-- Create and edit forms
+1. serializes the credential with an explicit schema and user identity;
+2. splits it into bounded keyring chunks;
+3. writes and reads back every chunk;
+4. computes and verifies SHA-256 over the complete payload;
+5. commits a small generation manifest last;
+6. updates the user registry only after the manifest round-trip succeeds;
+7. removes the previous generation after the new generation is committed.
 
-#### Google Slides - Allowed (all operations)
-- Read and edit presentations
+A missing chunk, malformed manifest, wrong identity, unsupported schema, or digest mismatch fails closed.
 
-## Remaining Risks
+### Legacy migration
 
-While this fork removes the most obvious exfiltration vectors, **data leakage is still possible** through the following mechanisms:
+The secure store can migrate:
 
-### 1. Creating Documents in Shared Folders
-If Claude creates a document in a folder that is already shared with an external party (including an attacker), that party will immediately gain access to the new document. The server cannot prevent this because:
-- Claude can create documents in any folder the user has access to
-- The server has no visibility into which folders are shared externally
-- Google Drive's permission model automatically grants folder permissions to new files
+- the previous single-entry native-keyring record; and
+- the v1.7.1 local JSON fallback record under the legacy credentials directory.
 
-**Mitigation**: Users should carefully review any prompts that involve creating documents, especially if the destination folder is not explicitly verified.
+Migration order is secure-store write, chunk and digest verification, manifest commit, registry commit, then legacy deletion. If secure storage cannot be proven, authentication fails and the legacy record remains available for recovery. If local-file deletion cannot be proven, the read also fails rather than silently claiming the plaintext copy was removed.
 
-### 2. Editing Attacker-Controlled Documents
-If an attacker shares a Google Doc with the user (or tricks the user into opening one), Claude could write sensitive information directly into that document, which the attacker can immediately see. This attack vector cannot be blocked because:
-- The server cannot distinguish between "user's own document" and "shared document from attacker"
-- Normal legitimate use cases involve editing shared documents
-- Revoking write access to all shared documents would break core functionality
+The secure store never calls the legacy store's write method.
 
-**Mitigation**: Users should be suspicious if Claude attempts to edit documents they don't recognize, especially if those documents were recently shared with them from external sources.
+## Integrity and failure behavior
 
-### 3. Jailbroken Claude with Direct API Access
-If Claude is successfully jailbroken through prompt injection, it could potentially write Python/JavaScript code that directly calls the Google Workspace APIs using the user's authenticated credentials. While the MCP server restricts which *tools* are available, Claude still has:
-- The ability to write and potentially execute code (via other tools or mechanisms)
-- Access to the same OAuth credentials the MCP server uses
-- Knowledge of the Google Workspace API structure
+- New chunks are generation-addressed so readers continue to see the previous committed generation until the new manifest is written.
+- A failed registry update restores the previous manifest and removes uncommitted chunks.
+- Missing or altered chunks are not reconstructed from plaintext.
+- Credential values are never printed by the secure store.
+- The user registry and manifest are read back after writes.
+- Deletion removes the committed generation, manifest, prior single-entry record, user registry entry, and any legacy local record.
 
-**Mitigation**: This is the hardest risk to mitigate and relies on:
-- Claude Code's permission system (never run with `--dangerously-skip-permissions`)
-- Claude's base model training to resist jailbreaks
-- User vigilance when reviewing tool calls that involve code execution
-- Limiting Claude Code's access to code execution tools in high-risk contexts
+## Remaining risks
 
-### Defense-in-Depth Recommendations
+Hardening cannot prevent every data path. Important remaining risks include:
 
-Given these residual risks:
+- writing sensitive content into a folder already shared externally;
+- editing a document controlled by an external identity;
+- the model copying Workspace data through another network, browser, shell, or MCP tool;
+- overly broad OAuth scopes needed by enabled read/write tools;
+- a compromised operating-system account reading data available to that user;
+- a malicious dependency or modified local checkout;
+- users approving the wrong Google account or OAuth scopes.
 
-1. **Enable permission prompts** - Never disable Claude Code's permission system
-2. **Review ALL tool usage, not just Google Workspace** - Watch for web requests, file writes, code execution, and other MCP tools
-3. **Review document operations carefully** - Pay special attention when Claude creates or edits documents, especially in shared locations
-4. **Audit shared folders** - Periodically review which folders have external sharing enabled
-5. **Monitor recent activity** - Check Google Drive's "Recent" view and Gmail's "Sent" folder after Claude sessions
-6. **Limit Claude's tool access** - Consider disabling other MCP servers or tools when working with sensitive data
-7. **Use dedicated accounts for sensitive work** - Consider using separate Google accounts for highly sensitive data that Claude shouldn't access
-8. **Treat all external content as untrusted** - Documents, emails, or websites from external sources could contain prompt injections
-9. **Review Claude Code's logs** - Periodically check what tools Claude has been using and what data it accessed
+Use a dedicated Google account when appropriate, enable only required tool groups, review provider consent, and monitor Google account activity.
 
-## OAuth Scopes
+## Supported deployment boundary
 
-This server requests only the minimum scopes needed:
+Security claims in this document require:
 
-```
-openid
-https://www.googleapis.com/auth/userinfo.email
-https://www.googleapis.com/auth/userinfo.profile
-https://www.googleapis.com/auth/gmail.readonly
-https://www.googleapis.com/auth/gmail.compose      # For drafts only, NOT sending
-https://www.googleapis.com/auth/gmail.modify
-https://www.googleapis.com/auth/gmail.labels
-https://www.googleapis.com/auth/drive
-https://www.googleapis.com/auth/drive.readonly
-https://www.googleapis.com/auth/drive.file
-https://www.googleapis.com/auth/documents.readonly
-https://www.googleapis.com/auth/documents
-https://www.googleapis.com/auth/spreadsheets.readonly
-https://www.googleapis.com/auth/spreadsheets
-https://www.googleapis.com/auth/calendar
-https://www.googleapis.com/auth/calendar.readonly
-https://www.googleapis.com/auth/calendar.events
-```
+- the maintained fork from `calidreamconstruction/hardened-google-workspace-mcp`;
+- the `hardened-google-workspace-mcp` or `python -m secure_main` entrypoint;
+- an external OAuth Desktop-app JSON path;
+- a trusted native keyring backend;
+- unmodified hardening guards and tool registry.
 
-**Notably absent:**
-- `gmail.send` - Cannot send emails
-- `gmail.settings.basic` - Cannot modify Gmail settings/filters
+## Reporting a vulnerability
 
-## Token Storage
+Open a private security advisory or contact the repository owner without including OAuth client JSON, access tokens, refresh tokens, private Workspace content, or raw credential-manager exports.
 
-By default, this server stores OAuth tokens in the **platform's native credential manager** via the `keyring` library:
-
-- **macOS**: Keychain (protected by system password / biometrics)
-- **Windows**: Credential Manager (protected by DPAPI, tied to user login)
-- **Linux**: SecretService (GNOME Keyring / KDE KWallet)
-
-The keyring backend is **validated at startup** against an allowlist of trusted backends. If an untrusted backend is detected (e.g. plaintext storage from `keyrings.alt`), the server refuses to start. This prevents silent fallback to insecure storage.
-
-Users authenticate once and remain authenticated across sessions. No plaintext JSON files are created.
-
-**Linux security note:** SecretService stores secrets in a user-session keyring that any process running as the same user can read. This is weaker than macOS Keychain (which can prompt for a password). On shared Linux systems, consider stateless mode instead.
-
-**Optional stateless mode:** Set `WORKSPACE_MCP_STATELESS_MODE=true` and `MCP_ENABLE_OAUTH21=true` to store tokens in memory only:
-
-- OAuth tokens are stored **in memory only**, not written to disk
-- Users must re-authenticate when the server restarts
-- Eliminates persistent credential storage entirely
-
-**Security trade-off:** Native credential managers provide good protection for most use cases, but stateless mode eliminates the credential storage attack surface entirely at the cost of more frequent re-authentication.
-
-## Kill Switch
-
-If you suspect a security incident, you can immediately revoke all access:
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Navigate to APIs & Services > Credentials
-3. Find the OAuth 2.0 Client ID for this integration
-4. Click "Disable" or "Delete"
-
-This will immediately invalidate all tokens and prevent any further access.
-
-## User Security Guidelines
-
-1. **Keep permission prompts ON** - Never run Claude Code with `--dangerously-skip-permissions`
-2. **Review ALL tool calls, not just Google Workspace** - Watch for:
-   - Unexpected web requests (WebFetch, curl, HTTP libraries)
-   - File write operations that could sync to cloud storage
-   - Code execution (especially Python/JavaScript that makes network calls)
-   - Use of other MCP servers you have installed
-3. **Be suspicious of unexpected requests** - If Claude suddenly wants to read many files, create drafts, or make web requests, review the context carefully
-4. **Watch Claude's behavior with external content** - Be extra vigilant when Claude processes:
-   - Emails from external senders
-   - Documents shared by people outside your organization
-   - Web pages or content from untrusted sources
-5. **Report strange behavior** - If Claude acts unexpectedly, investigate immediately
-6. **Don't paste untrusted content** - Content from external sources could contain prompt injections
-7. **Review your other MCP servers** - Audit what other tools Claude has access to beyond Google Workspace
-
-## Reporting Security Issues
-
-For security issues with this project, please [file an issue](https://github.com/c0webster/hardened-google-workspace-mcp/issues) on GitHub.
-
-For issues with the upstream google_workspace_mcp project, see the [upstream repository](https://github.com/taylorwilsdon/google_workspace_mcp).
+Repository issues: https://github.com/calidreamconstruction/hardened-google-workspace-mcp/issues
