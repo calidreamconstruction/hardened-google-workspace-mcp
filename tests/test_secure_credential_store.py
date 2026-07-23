@@ -9,9 +9,7 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "auth" / "secure_credential_store.py"
-SPEC = importlib.util.spec_from_file_location(
-    "secure_credential_store", MODULE_PATH
-)
+SPEC = importlib.util.spec_from_file_location("secure_credential_store", MODULE_PATH)
 assert SPEC and SPEC.loader
 STORE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(STORE)
@@ -29,12 +27,20 @@ class FakeKeyring:
         self.limit = limit
         self.values: dict[tuple[str, str], str] = {}
         self.fail_users_write = False
+        self.truncate_users_writes_remaining = 0
 
     def set_password(self, service: str, username: str, value: str) -> None:
         if self.fail_users_write and username == STORE.USERS_KEY:
             raise RuntimeError("user registry unavailable")
         if len(value) > self.limit:
             raise RuntimeError("credential too large")
+        if (
+            self.truncate_users_writes_remaining > 0
+            and username == STORE.USERS_KEY
+        ):
+            self.truncate_users_writes_remaining -= 1
+            self.values[(service, username)] = value[:-1]
+            return
         self.values[(service, username)] = value
 
     def get_password(self, service: str, username: str) -> str | None:
@@ -48,10 +54,18 @@ class FakeKeyring:
 
 
 class FakeLegacyStore:
-    def __init__(self, credential=None) -> None:
+    def __init__(
+        self,
+        credential=None,
+        *,
+        delete_ok: bool = True,
+        user_email: str = "legacy@example.com",
+    ) -> None:
         self.credential = credential
         self.deleted = False
         self.writes = 0
+        self.delete_ok = delete_ok
+        self.user_email = user_email
 
     def get_credential(self, _user_email: str):
         return self.credential
@@ -61,12 +75,14 @@ class FakeLegacyStore:
         return True
 
     def delete_credential(self, _user_email: str) -> bool:
+        if not self.delete_ok:
+            return False
         self.deleted = True
         self.credential = None
         return True
 
     def list_users(self) -> list[str]:
-        return ["legacy@example.com"] if self.credential else []
+        return [self.user_email] if self.credential else []
 
 
 def credential(*, refresh: str = "r" * 3200, token: str = "t" * 400):
@@ -98,7 +114,7 @@ class SecureCredentialStoreTests(unittest.TestCase):
 
     def test_large_windows_payload_uses_verified_chunks_only(self) -> None:
         keyring = FakeKeyring(limit=1000)
-        legacy = FakeLegacyStore()
+        legacy = FakeLegacyStore(user_email="owner@example.com")
         store = self.store(keyring=keyring, legacy=legacy)
         original = credential()
 
@@ -118,9 +134,7 @@ class SecureCredentialStoreTests(unittest.TestCase):
     def test_legacy_single_key_is_migrated(self) -> None:
         keyring = FakeKeyring(limit=1000)
         original = credential(refresh="legacy-refresh")
-        legacy_payload = STORE._credential_payload(
-            "owner@example.com", original
-        )
+        legacy_payload = STORE._credential_payload("owner@example.com", original)
         legacy_payload.pop("schema_version")
         legacy_payload.pop("user_email")
         keyring.values[(STORE.SERVICE_NAME, "owner@example.com")] = json.dumps(
@@ -133,8 +147,7 @@ class SecureCredentialStoreTests(unittest.TestCase):
         self.assertEqual(restored.refresh_token, "legacy-refresh")
         self.assertIsNotNone(
             keyring.get_password(
-                STORE.SERVICE_NAME,
-                store._manifest_key("owner@example.com"),
+                STORE.SERVICE_NAME, store._manifest_key("owner@example.com")
             )
         )
         self.assertIsNone(
@@ -159,9 +172,7 @@ class SecureCredentialStoreTests(unittest.TestCase):
         manifest = store._manifest("owner@example.com")
         keyring.delete_password(
             STORE.SERVICE_NAME,
-            store._chunk_key(
-                "owner@example.com", manifest["generation"], 0
-            ),
+            store._chunk_key("owner@example.com", manifest["generation"], 0),
         )
         self.assertIsNone(store.get_credential("owner@example.com"))
 
@@ -171,8 +182,7 @@ class SecureCredentialStoreTests(unittest.TestCase):
         self.assertFalse(store.store_credential("owner@example.com", credential()))
         self.assertIsNone(
             keyring.get_password(
-                STORE.SERVICE_NAME,
-                store._manifest_key("owner@example.com"),
+                STORE.SERVICE_NAME, store._manifest_key("owner@example.com")
             )
         )
 
@@ -186,9 +196,7 @@ class SecureCredentialStoreTests(unittest.TestCase):
         )
         old = store._manifest("owner@example.com")
         old_keys = {
-            store._chunk_key(
-                "owner@example.com", old["generation"], index
-            )
+            store._chunk_key("owner@example.com", old["generation"], index)
             for index in range(old["chunks"])
         }
         self.assertTrue(
@@ -212,8 +220,7 @@ class SecureCredentialStoreTests(unittest.TestCase):
             )
         )
         old_manifest = keyring.get_password(
-            STORE.SERVICE_NAME,
-            store._manifest_key("owner@example.com"),
+            STORE.SERVICE_NAME, store._manifest_key("owner@example.com")
         )
         keyring.fail_users_write = True
 
@@ -224,13 +231,65 @@ class SecureCredentialStoreTests(unittest.TestCase):
         )
         self.assertEqual(
             keyring.get_password(
-                STORE.SERVICE_NAME,
-                store._manifest_key("owner@example.com"),
+                STORE.SERVICE_NAME, store._manifest_key("owner@example.com")
             ),
             old_manifest,
         )
         restored = store.get_credential("owner@example.com")
         self.assertEqual(restored.refresh_token, "old" * 1000)
+
+    def test_silent_user_registry_truncation_restores_previous_value(self) -> None:
+        keyring = FakeKeyring(limit=1000)
+        keyring.values[(STORE.SERVICE_NAME, STORE.USERS_KEY)] = json.dumps(
+            ["existing@example.com"]
+        )
+        previous = keyring.get_password(STORE.SERVICE_NAME, STORE.USERS_KEY)
+        keyring.truncate_users_writes_remaining = 1
+        store = self.store(keyring=keyring)
+
+        self.assertFalse(
+            store.store_credential("owner@example.com", credential())
+        )
+        self.assertEqual(
+            keyring.get_password(STORE.SERVICE_NAME, STORE.USERS_KEY),
+            previous,
+        )
+
+    def test_committed_record_cleans_crash_residual_plaintext_on_read(self) -> None:
+        keyring = FakeKeyring(limit=1000)
+        legacy = FakeLegacyStore(user_email="owner@example.com")
+        store = self.store(keyring=keyring, legacy=legacy)
+        self.assertTrue(
+            store.store_credential("owner@example.com", credential())
+        )
+        legacy.credential = credential(refresh="stale-file-copy")
+        legacy.deleted = False
+
+        restored = store.get_credential("owner@example.com")
+
+        self.assertEqual(restored.refresh_token, "r" * 3200)
+        self.assertTrue(legacy.deleted)
+
+    def test_plaintext_cleanup_failure_is_recoverable_and_fail_closed(self) -> None:
+        keyring = FakeKeyring(limit=1000)
+        legacy = FakeLegacyStore(
+            credential(refresh="file-refresh"), delete_ok=False
+        )
+        store = self.store(keyring=keyring, legacy=legacy)
+
+        self.assertIsNone(store.get_credential("legacy@example.com"))
+        self.assertIsNotNone(store._manifest("legacy@example.com"))
+        self.assertIsNotNone(legacy.credential)
+
+        legacy.delete_ok = True
+        restored = store.get_credential("legacy@example.com")
+        self.assertEqual(restored.refresh_token, "file-refresh")
+        self.assertTrue(legacy.deleted)
+
+    def test_non_string_identity_fails_closed(self) -> None:
+        store = self.store()
+        self.assertFalse(store.store_credential(None, credential()))
+        self.assertIsNone(store.get_credential(None))
 
     def test_secure_entrypoint_disables_dotenv_before_importing_main(self) -> None:
         source = (ROOT / "secure_main.py").read_text(encoding="utf-8")
