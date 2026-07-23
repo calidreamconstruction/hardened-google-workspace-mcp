@@ -63,6 +63,7 @@ class SecurePackageContractTests(unittest.TestCase):
         source = SECURE_MAIN_PATH.read_text(encoding="utf-8")
         import_main = source.index("from main import main as upstream_main")
         for required in (
+            "validate_runtime_arguments(sys.argv)",
             'PYTHON_DOTENV_DISABLED", "1"',
             "disable_dotenv_loading()",
             "validated_client_secret_path(",
@@ -71,6 +72,22 @@ class SecurePackageContractTests(unittest.TestCase):
             "install_secure_credential_store()",
         ):
             self.assertLess(source.index(required), import_main)
+
+    def test_hardened_runtime_is_single_user_stdio_only(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "requires --single-user"):
+            SECURE_MAIN.validate_runtime_arguments(["program"])
+        with self.assertRaisesRegex(RuntimeError, "stdio transport only"):
+            SECURE_MAIN.validate_runtime_arguments(
+                ["program", "--single-user", "--transport", "streamable-http"]
+            )
+        with self.assertRaisesRegex(RuntimeError, "stdio transport only"):
+            SECURE_MAIN.validate_runtime_arguments(
+                ["program", "--single-user", "--transport=streamable-http"]
+            )
+        SECURE_MAIN.validate_runtime_arguments(
+            ["program", "--single-user", "--transport", "stdio"]
+        )
+        SECURE_MAIN.validate_runtime_arguments(["program", "--single-user"])
 
     def test_dotenv_loader_is_replaced_before_legacy_import(self) -> None:
         fake_dotenv = types.SimpleNamespace(load_dotenv=lambda *_a, **_k: True)
@@ -135,6 +152,8 @@ class SecurePackageContractTests(unittest.TestCase):
         self.assertIn("GOOGLE_CLIENT_SECRET_PATH", docs)
         self.assertIn("Windows Credential Manager", docs)
         self.assertIn("Desktop app", docs)
+        self.assertIn("single-user", docs.casefold())
+        self.assertIn("stdio", docs.casefold())
 
 
 if __name__ == "__main__":
