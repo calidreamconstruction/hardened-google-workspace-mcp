@@ -5,6 +5,11 @@ on:
     branches: [main]
     paths:
       - .github/workflows/azani-vps-recovery-probe.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/azani-vps-recovery-probe.yml
+      - azani-vps-recovery-probe.trigger
   workflow_dispatch:
 
 permissions:
