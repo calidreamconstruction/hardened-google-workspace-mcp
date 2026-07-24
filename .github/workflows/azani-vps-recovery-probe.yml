@@ -1,0 +1,48 @@
+name: azani-vps-recovery-probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/azani-vps-recovery-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HAS_VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY != '' }}
+      HAS_VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY != '' }}
+      HAS_SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY != '' }}
+      HAS_DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY != '' }}
+      HAS_VPS_HOST: ${{ secrets.VPS_HOST != '' }}
+      HAS_VPS_USER: ${{ secrets.VPS_USER != '' }}
+      HAS_TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY != '' }}
+      HAS_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+      HAS_OPENCLAW_GATEWAY_TOKEN: ${{ secrets.OPENCLAW_GATEWAY_TOKEN != '' }}
+    steps:
+      - name: Probe hosted lane and secret names without exposing values
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "runner=$RUNNER_NAME os=$RUNNER_OS"
+          for name in \
+            HAS_VPS_SSH_PRIVATE_KEY HAS_VPS_SSH_KEY HAS_SSH_PRIVATE_KEY \
+            HAS_DEPLOY_SSH_KEY HAS_VPS_HOST HAS_VPS_USER \
+            HAS_TAILSCALE_AUTHKEY HAS_CLOUDFLARE_API_TOKEN \
+            HAS_OPENCLAW_GATEWAY_TOKEN; do
+            printf '%s=%s\n' "$name" "${!name}"
+          done
+          timeout 5 bash -c '</dev/tcp/5.78.79.135/22' \
+            && echo 'vps_tcp_22=reachable' \
+            || echo 'vps_tcp_22=unreachable'
+          timeout 5 bash -c '</dev/tcp/5.78.79.135/443' \
+            && echo 'vps_tcp_443=reachable' \
+            || echo 'vps_tcp_443=unreachable'
+          getent ahosts openclaw.calidreamconstruction.com | head -4 || true
+          curl -ksS --max-time 8 -o /dev/null -w 'openclaw_https_status=%{http_code}\n' \
+            https://openclaw.calidreamconstruction.com/ || true
