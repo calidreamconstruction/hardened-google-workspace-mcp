@@ -30,7 +30,7 @@ jobs:
       HAS_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
       HAS_OPENCLAW_GATEWAY_TOKEN: ${{ secrets.OPENCLAW_GATEWAY_TOKEN != '' }}
     steps:
-      - name: Probe hosted lane and secret names without exposing values
+      - name: Probe hosted lane and existing VPS control surfaces
         shell: bash
         run: |
           set -euo pipefail
@@ -42,12 +42,24 @@ jobs:
             HAS_OPENCLAW_GATEWAY_TOKEN; do
             printf '%s=%s\n' "$name" "${!name}"
           done
-          timeout 5 bash -c '</dev/tcp/5.78.79.135/22' \
-            && echo 'vps_tcp_22=reachable' \
-            || echo 'vps_tcp_22=unreachable'
-          timeout 5 bash -c '</dev/tcp/5.78.79.135/443' \
-            && echo 'vps_tcp_443=reachable' \
-            || echo 'vps_tcp_443=unreachable'
-          getent ahosts openclaw.calidreamconstruction.com | head -4 || true
-          curl -ksS --max-time 8 -o /dev/null -w 'openclaw_https_status=%{http_code}\n' \
-            https://openclaw.calidreamconstruction.com/ || true
+
+          for port in 22 80 443 18789 8765 8000 8080 9000; do
+            if timeout 4 bash -c "</dev/tcp/5.78.79.135/$port" 2>/dev/null; then
+              echo "vps_tcp_${port}=reachable"
+            else
+              echo "vps_tcp_${port}=unreachable"
+            fi
+          done
+
+          for url in \
+            http://5.78.79.135:18789/ \
+            http://5.78.79.135:18789/health \
+            http://5.78.79.135:18789/api/health \
+            http://5.78.79.135:8765/health \
+            http://5.78.79.135:8765/api/health \
+            https://openclaw.calidreamconstruction.com/ \
+            https://openclaw.calidreamconstruction.com/health \
+            https://openclaw.calidreamconstruction.com/api/health; do
+            code=$(curl -ksS --max-time 6 -o /dev/null -w '%{http_code}' "$url" || true)
+            printf 'http_probe=%s status=%s\n' "$url" "${code:-000}"
+          done
