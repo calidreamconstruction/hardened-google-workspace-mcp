@@ -1,0 +1,173 @@
+name: Hermes Config Drift Live Repair Carrier
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/hermes-config-drift-live-repair.yml"
+      - "ops/hermes_public_executor_bootstrap.ps1"
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: hermes-config-drift-live-repair-carrier
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Check out bounded repair carrier
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Execute repair through canonical PC endpoint
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          base='https://pc-executor.calidreamconstruction.com'
+          id='owner-hermes-config-drift-public-repair-20260726-009'
+          work="$RUNNER_TEMP/$id"
+          mkdir -p "$work"
+
+          pc_exec() {
+            local command="$1" response="$2"
+            python3 - "$command" > "$work/request.json" <<'PY'
+          import json,sys
+          print(json.dumps({'action':'execute_command','params':{'command':sys.argv[1]}}))
+          PY
+            local status rc
+            set +e
+            status=$(curl -sS --connect-timeout 12 --max-time 28 \
+              -o "$response" -w '%{http_code}' \
+              -H 'content-type: application/json' \
+              --data-binary @"$work/request.json" "$base/execute")
+            rc=$?
+            set -e
+            if [ "$rc" -ne 0 ] || [ "$status" != '200' ]; then
+              echo "executor HTTP failure: curl=$rc status=$status" >&2
+              head -c 1400 "$response" 2>/dev/null >&2 || true
+              return 1
+            fi
+            python3 - "$response" <<'PY'
+          import json,sys
+          p=json.load(open(sys.argv[1],encoding='utf-8'))
+          if not p.get('success'):
+              raise SystemExit('executor command failed: '+str(p.get('error') or p.get('result'))[:1200])
+          PY
+          }
+
+          post_comment() {
+            local proof_file="$1"
+            python3 - "$proof_file" "$work/comment.json" <<'PY'
+          import json,sys
+          proof=json.load(open(sys.argv[1],encoding='utf-8'))
+          body='### Hermes config drift live repair\n\n```json\n'+json.dumps(proof,sort_keys=True,separators=(',',':'))+'\n```'
+          json.dump({'body':body},open(sys.argv[2],'w',encoding='utf-8'))
+          PY
+            curl -fsS --max-time 25 -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              -H 'content-type: application/json' \
+              --data-binary @"$work/comment.json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" >/dev/null
+          }
+
+          health_status=$(curl -sS --connect-timeout 12 --max-time 25 \
+            -o "$work/health.json" -w '%{http_code}' "$base/health" || true)
+          if [ "$health_status" != '200' ]; then
+            printf '%s\n' "{\"schema\":\"faressystem.hermes.public_carrier_proof/v1\",\"status\":\"failed_with_evidence\",\"blocker\":\"pc_executor_health_http_${health_status}\",\"secrets_emitted\":false}" > "$work/proof.json"
+            post_comment "$work/proof.json" || true
+            cat "$work/proof.json"
+            exit 1
+          fi
+
+          bootstrap_b64=$(base64 -w0 ops/hermes_public_executor_bootstrap.ps1)
+          summary_remote="C:\\FaresSystem\\ops\\chatgpt_results\\$id.summary.json"
+          raw_remote="C:\\FaresSystem\\ops\\chatgpt_results\\$id.raw.json"
+          launch="powershell -NoProfile -ExecutionPolicy Bypass -Command \"\$summary='$summary_remote'; \$raw='$raw_remote'; Remove-Item -LiteralPath \$summary,\$raw -Force -ErrorAction SilentlyContinue; \$p=Join-Path \$env:TEMP '$id.bootstrap.ps1'; [IO.File]::WriteAllBytes(\$p,[Convert]::FromBase64String('$bootstrap_b64')); Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',\$p) -WindowStyle Hidden; Write-Output 'LAUNCHED'\""
+          pc_exec "$launch" "$work/launch.json"
+
+          summary=''
+          for attempt in $(seq 1 150); do
+            read="powershell -NoProfile -ExecutionPolicy Bypass -Command \"\$p='$summary_remote'; if(Test-Path -LiteralPath \$p){Get-Content -LiteralPath \$p -Raw}else{Write-Output 'PENDING'}\""
+            if pc_exec "$read" "$work/poll.json"; then
+              summary=$(python3 - "$work/poll.json" <<'PY'
+          import json,sys
+          print((json.load(open(sys.argv[1],encoding='utf-8')).get('output') or '').strip())
+          PY
+              )
+              if [ -n "$summary" ] && [ "$summary" != 'PENDING' ]; then
+                break
+              fi
+            fi
+            sleep 5
+          done
+          if [ -z "$summary" ] || [ "$summary" = 'PENDING' ]; then
+            summary='{"status":"failed_with_evidence","blocker":"repair_summary_timeout"}'
+          fi
+          printf '%s\n' "$summary" > "$work/summary.json"
+
+          independent='powershell -NoProfile -ExecutionPolicy Bypass -Command "$c='\''C:\Users\fares\AppData\Local\hermes\config.yaml'\''; $h=(Get-FileHash -LiteralPath $c -Algorithm SHA256).Hash; $b=(Get-Content -LiteralPath ($c+'\''.sha256'\'') -Raw).Trim(); $w=Get-ScheduledTask -TaskName '\''Azani.PC.HermesGatewayWatchdog'\'' -ErrorAction SilentlyContinue; [ordered]@{hash_match=($h -eq $b);hash=$h;baseline=$b;watchdog=if($w){[string]$w.State}else{'\''Missing'\''}}|ConvertTo-Json -Compress"'
+          if pc_exec "$independent" "$work/independent-response.json"; then
+            python3 - "$work/independent-response.json" "$work/independent.json" <<'PY'
+          import json,sys
+          outer=json.load(open(sys.argv[1],encoding='utf-8'))
+          raw=(outer.get('output') or '').strip()
+          try:data=json.loads(raw)
+          except Exception:data={'parse_error':raw[:400]}
+          json.dump(data,open(sys.argv[2],'w',encoding='utf-8'),indent=2,sort_keys=True)
+          PY
+          else
+            printf '%s\n' '{"probe_failed":true}' > "$work/independent.json"
+          fi
+
+          python3 - "$work/health.json" "$work/summary.json" "$work/independent.json" "$work/proof.json" <<'PY'
+          import json,sys
+          def load(path):
+              try:return json.load(open(path,encoding='utf-8'))
+              except Exception as exc:return {'parse_error':str(exc)}
+          health,summary,independent=map(load,sys.argv[1:4])
+          verified=(
+              summary.get('status')=='verified' and
+              bool(summary.get('cfg')) and summary.get('cfg')==summary.get('baseline') and
+              summary.get('provider')=='custom' and
+              summary.get('probe')=='PROVIDER_OK' and
+              summary.get('canary')=='HERMES_PROVIDER_OK' and
+              summary.get('gateway')==1 and
+              summary.get('telegram')=='connected' and
+              summary.get('watchdog') is True and
+              summary.get('override') in ('',None) and
+              independent.get('hash_match') is True and
+              independent.get('watchdog') not in ('Disabled','Missing',None)
+          )
+          proof={
+              'schema':'faressystem.hermes.public_carrier_proof/v1',
+              'status':'verified' if verified else 'failed_with_evidence',
+              'executor_health':health,
+              'repair_summary':summary,
+              'independent_postcheck':independent,
+              'secrets_emitted':False,
+          }
+          json.dump(proof,open(sys.argv[4],'w',encoding='utf-8'),indent=2,sort_keys=True)
+          PY
+
+          post_comment "$work/proof.json" || true
+          cat "$work/proof.json"
+          python3 - "$work/proof.json" <<'PY'
+          import json,sys
+          if json.load(open(sys.argv[1],encoding='utf-8')).get('status')!='verified':
+              raise SystemExit('Hermes repair did not verify')
+          PY
