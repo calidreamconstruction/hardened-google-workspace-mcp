@@ -1,0 +1,148 @@
+name: Hermes Config Drift VPS Bridge Repair
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/hermes-config-drift-vps-bridge-repair.yml"
+      - "ops/hermes_vps_bridge_repair.sh"
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: hermes-config-drift-vps-bridge-repair
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+    steps:
+      - name: Check out bounded bridge repair
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Repair Hermes through existing VPS SSH and private PC bridge
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          id='owner-hermes-config-drift-vps-bridge-repair-20260726-012'
+          work="$RUNNER_TEMP/$id"
+          mkdir -p "$work"
+
+          post_comment() {
+            python3 - "$work/proof.json" "$work/comment.json" <<'PY'
+          import json,sys
+          proof=json.load(open(sys.argv[1],encoding='utf-8'))
+          body='### Hermes config drift VPS bridge repair\n\n```json\n'+json.dumps(proof,sort_keys=True,separators=(',',':'))+'\n```'
+          json.dump({'body':body},open(sys.argv[2],'w',encoding='utf-8'))
+          PY
+            curl -fsS --max-time 25 -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              -H 'content-type: application/json' \
+              --data-binary @"$work/comment.json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" >/dev/null
+          }
+
+          key="${VPS_SSH_PRIVATE_KEY:-${VPS_SSH_KEY:-${SSH_PRIVATE_KEY:-${DEPLOY_SSH_KEY:-}}}}"
+          host="${VPS_HOST:-5.78.79.135}"
+          user="${VPS_USER:-root}"
+          if [ -z "$key" ]; then
+            printf '%s\n' '{"schema":"faressystem.hermes.vps_bridge_repair_proof/v1","status":"failed_with_evidence","transport":"hosted_ssh_to_vps","blocker":"no_vps_ssh_key_secret_available","secrets_emitted":false}' > "$work/proof.json"
+            post_comment || true
+            cat "$work/proof.json"
+            exit 1
+          fi
+
+          key_path="$work/vps_key"
+          if printf '%s' "$key" | grep -q 'BEGIN .*PRIVATE KEY'; then
+            printf '%s\n' "$key" | tr -d '\r' > "$key_path"
+          else
+            printf '%s' "$key" | base64 -d > "$key_path" 2>/dev/null || {
+              printf '%s\n' '{"schema":"faressystem.hermes.vps_bridge_repair_proof/v1","status":"failed_with_evidence","transport":"hosted_ssh_to_vps","blocker":"vps_ssh_key_format_unrecognized","secrets_emitted":false}' > "$work/proof.json"
+              post_comment || true
+              exit 1
+            }
+          fi
+          chmod 600 "$key_path"
+
+          ssh_opts=(
+            -i "$key_path"
+            -o BatchMode=yes
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile="$work/known_hosts"
+            -o ConnectTimeout=15
+            -o ServerAliveInterval=10
+            -o ServerAliveCountMax=4
+            -o LogLevel=ERROR
+          )
+
+          set +e
+          ssh "${ssh_opts[@]}" "$user@$host" 'printf VPS_SSH_OK' >"$work/ssh-probe.out" 2>"$work/ssh-probe.err"
+          probe_rc=$?
+          set -e
+          if [ "$probe_rc" -ne 0 ] || ! grep -q VPS_SSH_OK "$work/ssh-probe.out"; then
+            tail=$(tail -c 700 "$work/ssh-probe.err" | tr '\r\n' ' ' | sed -E 's/(token|secret|password|api[_-]?key)=[^ ]+/\1=[REDACTED]/Ig')
+            python3 - "$tail" "$work/proof.json" <<'PY'
+          import json,sys
+          json.dump({'schema':'faressystem.hermes.vps_bridge_repair_proof/v1','status':'failed_with_evidence','transport':'hosted_ssh_to_vps','blocker':'vps_ssh_failed:'+sys.argv[1][:700],'secrets_emitted':False},open(sys.argv[2],'w'),separators=(',',':'))
+          PY
+            post_comment || true
+            cat "$work/proof.json"
+            exit 1
+          fi
+
+          remote="/tmp/${id}.sh"
+          scp "${ssh_opts[@]}" ops/hermes_vps_bridge_repair.sh "$user@$host:$remote" >"$work/scp.out" 2>"$work/scp.err"
+          set +e
+          ssh "${ssh_opts[@]}" "$user@$host" "chmod 700 '$remote' && '$remote'; rc=\$?; rm -f '$remote'; exit \$rc" >"$work/remote.out" 2>"$work/remote.err"
+          remote_rc=$?
+          set -e
+
+          python3 - "$work/remote.out" "$work/remote.err" "$work/proof.json" <<'PY'
+          import json,re,sys
+          from pathlib import Path
+          stdout=Path(sys.argv[1]).read_text(encoding='utf-8',errors='replace')
+          stderr=Path(sys.argv[2]).read_text(encoding='utf-8',errors='replace')
+          decoder=json.JSONDecoder(); candidates=[]
+          for i,ch in enumerate(stdout):
+              if ch!='{': continue
+              try:value,_=decoder.raw_decode(stdout[i:])
+              except Exception:continue
+              if isinstance(value,dict) and value.get('schema')=='faressystem.hermes.vps_bridge_repair_proof/v1':
+                  candidates.append(value)
+          if candidates:
+              proof=candidates[-1]
+          else:
+              tail=(stderr+'\n'+stdout)[-1200:]
+              tail=re.sub(r'(?i)(token|secret|password|passwd|api[_-]?key|authorization|cookie)\s*[:=]\s*[^\s;,]+',r'\1=[REDACTED]',tail)
+              proof={'schema':'faressystem.hermes.vps_bridge_repair_proof/v1','status':'failed_with_evidence','transport':'hosted_ssh_to_vps','blocker':'remote_proof_missing:'+tail[:1100],'secrets_emitted':False}
+          json.dump(proof,open(sys.argv[3],'w',encoding='utf-8'),indent=2,sort_keys=True)
+          PY
+
+          post_comment || true
+          cat "$work/proof.json"
+          python3 - "$work/proof.json" "$remote_rc" <<'PY'
+          import json,sys
+          proof=json.load(open(sys.argv[1],encoding='utf-8'))
+          if proof.get('status')!='verified' or int(sys.argv[2])!=0:
+              raise SystemExit('Hermes VPS bridge repair did not verify')
+          PY
